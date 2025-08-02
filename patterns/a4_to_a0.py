@@ -1,135 +1,114 @@
 #!/usr/bin/env python3
 """
-Convert a 42-page (7 × 6) A4-tiled sewing pattern into 4 portrait-A0 sheets,
-preserving the intended 10 mm overlaps marked by green diamonds.
-
-Compatible with pypdf >= 3.10 (the successor to PyPDF2).
+Convert an A4-tiled sewing pattern into A0 sheets.
 """
-
+import math
 import sys
 from pathlib import Path
 
-# ----  use pypdf (pip install pypdf)  ----------------------------------------
 from pypdf import PdfReader, PdfWriter, Transformation
 
-# ISO-216 sizes in PostScript points
-MM2PT = 72 / 25.4
-A0_W_PT = 841 * MM2PT           # ≈ 2384 pt
-A0_H_PT = 1189 * MM2PT          # ≈ 3370 pt
 
-ROWS, COLS        = 6, 7        # full tiling grid
-ROWS_PER_BLOCK    = 3           # 3 rows per A0
-COLS_PER_BLOCK    = (4, 3)      # 4 cols on the left, 3 on the right
-
-
-def main(src: Path, dst: Path) -> None:
+def main(src: Path, dst: Path, a4_rows: int, a4_cols: int, crop_t_mm: float, crop_b_mm: float, crop_l_mm: float, crop_r_mm: float) -> None:
     reader = PdfReader(str(src))
-    if len(reader.pages) != 42:
-        sys.exit("❌  Expected exactly 42 pages laid out 7 × 6.")
+    if len(reader.pages) != a4_rows * a4_cols:
+        sys.exit(f"Expected {a4_rows} x {a4_cols} = {a4_rows * a4_cols} pages.")
+
+    a0_rows = math.ceil(a4_rows / 4)
+    a0_cols = math.ceil(a4_cols / 4)
 
     # true trimmed-tile size (page 0 is representative)
     tile_w = float(reader.pages[0].mediabox.width)
     tile_h = float(reader.pages[0].mediabox.height)
 
+    MM2PT = tile_w / 210
+
+    A0_W_PT = tile_w * 4
+    A0_H_PT = tile_h * 4
+
     # Crop amount in mm and points
-    crop_mm = 3.2
-    crop_pt = crop_mm * MM2PT
-    
-    # Padding around each A0 tile in mm and points
-    padding_mm = 5
-    padding_pt = padding_mm * MM2PT
+    crop_t_pt = crop_t_mm * MM2PT
+    crop_b_pt = crop_b_mm * MM2PT
+    crop_l_pt = crop_l_mm * MM2PT
+    crop_r_pt = crop_r_mm * MM2PT
     
     # Cropped tile dimensions
-    cropped_tile_w = tile_w - 2 * crop_pt  # 3mm from left and right
-    cropped_tile_h = tile_h - 2 * crop_pt  # 3mm from top and bottom
-
-    # margins so adjoining sheets butt exactly at the overlap marks
-    # Account for variable cropping: interior tiles are cropped, peripheral tiles are not
-    effective_width = COLS_PER_BLOCK[0] * tile_w - (COLS_PER_BLOCK[0] - 1) * crop_pt  # Left block: 4 tiles, 3 interior gaps
-    effective_height = ROWS_PER_BLOCK * tile_h - (ROWS_PER_BLOCK - 1) * crop_pt  # 3 tiles, 2 interior gaps
-    
-    # Add padding around each A0 tile
-    LEFT_BLOCK_MARGIN_X   = padding_pt + (A0_W_PT - effective_width - 2 * padding_pt) / 2
-    RIGHT_BLOCK_MARGIN_X  = padding_pt
-    TOP_BLOCK_MARGIN_Y    = padding_pt + (A0_H_PT - effective_height - 2 * padding_pt) / 2
-    BOTTOM_BLOCK_MARGIN_Y = padding_pt
+    cropped_tile_w = tile_w - crop_l_pt - crop_r_pt
+    cropped_tile_h = tile_h - crop_t_pt - crop_b_pt
 
     writer = PdfWriter()
-    for _ in range(4):
+    for _ in range(a0_rows * a0_cols):
         writer.add_blank_page(width=A0_W_PT, height=A0_H_PT)
 
     for idx, page in enumerate(reader.pages):
-        row, col = divmod(idx, COLS)          # 0-based
-        col_block = 0 if col < 4 else 1       # 0 = left-hand A0, 1 = right-hand
-        row_block = 0 if row < 3 else 1       # 0 = top A0, 1 = bottom A0
-        a0_idx    = row_block * 2 + col_block
-        target    = writer.pages[a0_idx]
+        a4_row, a4_col = divmod(idx, a4_cols)
+        a0_row, a0_col = a4_row // 4, a4_col // 4
+        within_page_row = a4_row % 4
+        within_page_col = a4_col % 4
 
-        # ----- global coordinates in the 7×6 canvas --------------------------
-        # Calculate position based on original tile dimensions, accounting for cropping
-        gx = col * tile_w
-        gy = (ROWS - 1 - row) * tile_h        # origin bottom-left
-        
-        # Adjust for cropping on left and bottom edges
-        if col > 0:  # Not leftmost column
-            gx -= 2 * col * crop_pt  # Account for left cropping of all tiles to the left
-        if row < ROWS - 1:  # Not bottommost row
-            gy -= 2 *(ROWS - 1 - row) * crop_pt  # Account for bottom cropping of all tiles below
+        target_page = writer.pages[a0_row * a0_cols + a0_col]
 
-        # ----- convert to local coords inside this A0 block ------------------
-        block_x0 = 0 if col_block == 0 else 4 * tile_w - 8 * crop_pt  # Account for cropping in left block
-        block_y0 = 3 * tile_h - 6 * crop_pt if row_block == 0 else 0  # Account for cropping in top block
-        lx = gx - block_x0
-        ly = gy - block_y0
+        if within_page_col == 0:
+            lx = 0
+            crop_left = False
+        else:
+            lx = cropped_tile_w * within_page_col
+            crop_left = True
 
-        # ----- add margins so patterns meet at sheet edges -------------------
-        lx += LEFT_BLOCK_MARGIN_X  if col_block == 0 else RIGHT_BLOCK_MARGIN_X
-        ly += TOP_BLOCK_MARGIN_Y   if row_block == 0 else BOTTOM_BLOCK_MARGIN_Y
+        if (within_page_row == 3):
+            ly = 0
+            crop_bottom = False
+        else:
+            ly = cropped_tile_h * (3 - within_page_row)
+            crop_bottom = True
 
-        # Crop 3.2mm from all 4 sides of each tile, except for peripheral tiles
-        # Create a cropped version of the page by adjusting the mediabox
+        if a4_row == (a4_rows - 1):  # account for if this is the last row
+            crop_bottom = False
+
+        if (within_page_col == 3) or (a4_col == (a4_cols - 1)):  # account for if this is the last column
+            crop_right = False
+        else:
+            crop_right = True
+
+        if within_page_row == 0:
+            crop_top = False
+        else:
+            crop_top = True
+
         cropped_page = page
-        
-        # Determine which edges to crop based on position
-        crop_left = col > 0  # Don't crop left edge of leftmost tiles
-        crop_right = col < COLS - 1  # Don't crop right edge of rightmost tiles
-        crop_top = row > 0  # Don't crop top edge of topmost tiles
-        crop_bottom = row < ROWS - 1  # Don't crop bottom edge of bottommost tiles
         
         # Apply cropping based on position
         if crop_left:
             cropped_page.mediabox.lower_left = (
-                cropped_page.mediabox.lower_left[0] + crop_pt,
+                cropped_page.mediabox.lower_left[0] + crop_l_pt,
                 cropped_page.mediabox.lower_left[1]
             )
         if crop_right:
             cropped_page.mediabox.upper_right = (
-                cropped_page.mediabox.upper_right[0] - crop_pt,
+                cropped_page.mediabox.upper_right[0] - crop_r_pt,
                 cropped_page.mediabox.upper_right[1]
             )
         if crop_bottom:
             cropped_page.mediabox.lower_left = (
                 cropped_page.mediabox.lower_left[0],
-                cropped_page.mediabox.lower_left[1] + crop_pt
+                cropped_page.mediabox.lower_left[1] + crop_t_pt
             )
         if crop_top:
             cropped_page.mediabox.upper_right = (
                 cropped_page.mediabox.upper_right[0],
-                cropped_page.mediabox.upper_right[1] - crop_pt
+                cropped_page.mediabox.upper_right[1] - crop_b_pt
             )
         
         # Place the cropped tile
-        target.merge_transformed_page(
+        target_page.merge_transformed_page(
             cropped_page,
             Transformation().translate(tx=lx, ty=ly)
         )
 
     with open(dst, "wb") as fh:
         writer.write(fh)
-    print(f"✅  Wrote “{dst}” – four portrait-A0 pages, ready for 100 % printing.")
+    print(f"Wrote {dst}")
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        sys.exit("Usage: python a4_to_a0.py input.pdf output_a0.pdf")
-    main(Path(sys.argv[1]), Path(sys.argv[2]))
+    main(Path(sys.argv[1]), Path(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4]), float(sys.argv[5]), float(sys.argv[6]), float(sys.argv[7]), float(sys.argv[8]))
