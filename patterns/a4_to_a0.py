@@ -60,6 +60,12 @@ def main(src: Path, dst: Path, a4_rows: int, a4_cols: int, crop_t_mm: float, cro
         cropped_tile_w = tile_w - crop_l_pt - crop_r_pt
         cropped_tile_h = tile_h - crop_t_pt - crop_b_pt
 
+        new_w_margin = (A0_W_PT - (4 * cropped_tile_w)) / 2
+        new_h_margin = (A0_H_PT - (4 * cropped_tile_h)) / 2
+
+        if new_w_margin < MARGIN_PT or new_h_margin < MARGIN_PT:
+            sys.exit(f"New margins are too small: {new_w_margin}pt x {new_h_margin}pt")
+
         a4_row, a4_col = divmod(idx, a4_cols)
         a0_row, a0_col = a4_row // 4, a4_col // 4
         within_page_row = a4_row % 4
@@ -68,17 +74,17 @@ def main(src: Path, dst: Path, a4_rows: int, a4_cols: int, crop_t_mm: float, cro
         target_page = writer.pages[a0_row * a0_cols + a0_col]
 
         if within_page_col == 0:
-            lx = MARGIN_PT
+            lx = new_w_margin
             crop_left = False
         else:
-            lx = MARGIN_PT + cropped_tile_w * within_page_col
+            lx = new_w_margin + cropped_tile_w * within_page_col
             crop_left = True
 
         if (within_page_row == 3):
-            ly = MARGIN_PT
+            ly = new_h_margin
             crop_bottom = False
         else:
-            ly = MARGIN_PT + cropped_tile_h * (3 - within_page_row)
+            ly = new_h_margin + cropped_tile_h * (3 - within_page_row)
             crop_bottom = True
 
         if a4_row == (a4_rows - 1):  # account for if this is the last row
